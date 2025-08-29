@@ -27,7 +27,6 @@ ChartJS.register(
 );
 
 export default function Home() {
-  // inputs
   const [L, setL] = useState(0); // m or ft
   const [P, setP] = useState(0); // kN or kip
   const [w, setW] = useState(0); // kN/m or kip/ft
