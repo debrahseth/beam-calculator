@@ -1,5 +1,6 @@
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import DynamicHtml from "./components/DynamicHtml";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -18,12 +19,12 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en">
+    <DynamicHtml>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         {children}
       </body>
-    </html>
+    </DynamicHtml>
   );
 }

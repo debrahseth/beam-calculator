@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { Line } from "react-chartjs-2";
 import "katex/dist/katex.min.css";
 import { BlockMath, InlineMath } from "react-katex";
@@ -28,17 +28,19 @@ ChartJS.register(
 
 export default function Home() {
   // inputs
-  const [L, setL] = useState(6); // m or ft
-  const [P, setP] = useState(12); // kN or kip
-  const [w, setW] = useState(5); // kN/m or kip/ft
+  const [L, setL] = useState(0); // m or ft
+  const [P, setP] = useState(0); // kN or kip
+  const [w, setW] = useState(0); // kN/m or kip/ft
   const [caseType, setCaseType] = useState("simply-supported-point");
-  const [a, setA] = useState(3); // position of point load (m or ft)
+  const [a, setA] = useState(0); // position of point load (m or ft)
   const [P2, setP2] = useState(0); // second point load (kN or kip)
   const [a2, setA2] = useState(0); // position of second point load
   const [udlStart, setUdlStart] = useState(0); // UDL start position
   const [udlEnd, setUdlEnd] = useState(0); // UDL end position
   const [triangularLoad, setTriangularLoad] = useState(0); // peak triangular load (kN/m or kip/ft)
   const [units, setUnitsState] = useState("SI"); // SI or Imperial
+  const [supportLeft, setSupportLeft] = useState(0);
+  const [supportRight, setSupportRight] = useState(0);
 
   const POINTS = 200; // resolution for plots
 
@@ -58,6 +60,8 @@ export default function Home() {
     setA2((prev) => Number((prev * factorLength).toFixed(3)));
     setUdlStart((prev) => Number((prev * factorLength).toFixed(3)));
     setUdlEnd((prev) => Number((prev * factorLength).toFixed(3)));
+    setSupportLeft((prev) => Number((prev * factorLength).toFixed(3)));
+    setSupportRight((prev) => Number((prev * factorLength).toFixed(3)));
     setP((prev) => Number((prev * factorForce).toFixed(3)));
     setP2((prev) => Number((prev * factorForce).toFixed(3)));
     setW((prev) => Number((prev * factorDistLoad).toFixed(3)));
@@ -65,6 +69,11 @@ export default function Home() {
 
     setUnitsState(newUnits);
   };
+
+  useEffect(() => {
+    if (supportLeft > L) setSupportLeft(L);
+    if (supportRight > L) setSupportRight(L);
+  }, [L]);
 
   const results = useMemo(() => {
     const len = Number(L) || 0;
@@ -76,6 +85,9 @@ export default function Home() {
     const posA2 = Number(a2) || 0;
     const udlS = Number(udlStart) || 0;
     const udlE = Number(udlEnd) || len;
+    let posS1 = Number(supportLeft) || 0;
+    let posS2 = Number(supportRight) || len;
+    if (posS1 > posS2) [posS1, posS2] = [posS2, posS1];
 
     // arrays for plotting
     const xs = [];
@@ -90,82 +102,125 @@ export default function Home() {
       let V = 0;
       let M = 0;
 
-      switch (caseType) {
-        case "simply-supported-point": {
-          // point load at arbitrary position a
-          const RA = (pointLoad * (len - posA)) / len;
-          const RB = (pointLoad * posA) / len;
-          if (x < posA) {
-            V = RA;
-            M = RA * x;
-          } else {
-            V = RA - pointLoad;
-            M = RB * (len - x);
-          }
-          break;
+      const isSimplySupported = caseType.startsWith("simply-supported");
+
+      let RA = 0;
+      let RB = 0;
+      let Mfix = 0;
+
+      if (isSimplySupported) {
+        let total_load = 0;
+        let moment_about_S1 = 0;
+        let load_len = udlE - udlS;
+
+        switch (caseType) {
+          case "simply-supported-point":
+            total_load = pointLoad;
+            moment_about_S1 = pointLoad * (posA - posS1);
+            break;
+          case "simply-supported-multi-point":
+            total_load = pointLoad + pointLoad2;
+            moment_about_S1 =
+              pointLoad * (posA - posS1) + pointLoad2 * (posA2 - posS1);
+            break;
+          case "simply-supported-udl":
+            total_load = udl * load_len;
+            let cent_udl = udlS + load_len / 2;
+            moment_about_S1 = total_load * (cent_udl - posS1);
+            break;
+          case "simply-supported-triangular":
+            total_load = (triLoad * load_len) / 2;
+            let cent_tri = udlS + load_len / 3;
+            moment_about_S1 = total_load * (cent_tri - posS1);
+            break;
         }
 
-        case "simply-supported-multi-point": {
-          // multiple point loads at a and a2
-          const RA =
-            (pointLoad * (len - posA) + pointLoad2 * (len - posA2)) / len;
-          const RB = pointLoad + pointLoad2 - RA;
-          V = RA;
-          M = RA * x;
-          if (x > posA) V -= pointLoad;
-          if (x > posA2) V -= pointLoad2;
-          if (x > posA) M = RA * x - pointLoad * (x - posA);
-          if (x > posA2)
-            M = RA * x - pointLoad * (x - posA) - pointLoad2 * (x - posA2);
-          break;
+        let span = posS2 - posS1;
+        RB = span > 0 ? moment_about_S1 / span : 0;
+        RA = total_load - RB;
+
+        if (posS1 < x) {
+          V += RA;
+          M += RA * (x - posS1);
+        }
+        if (posS2 < x) {
+          V += RB;
+          M += RB * (x - posS2);
         }
 
-        case "cantilever-point": {
-          V = -pointLoad;
-          M = -pointLoad * (len - x);
-          break;
-        }
+        let length_left = 0;
+        let total_left = 0;
+        let dist_cent = 0;
+        let k = 0;
 
-        case "simply-supported-udl": {
-          const loadLength = udlE - udlS;
-          const totalLoad = udl * loadLength;
-          const RA = (totalLoad * (len - (udlS + loadLength / 2))) / len;
-          const RB = totalLoad - RA;
-          const loaded = Math.max(0, Math.min(x - udlS, loadLength));
-          V = RA - udl * loaded;
-          M =
-            RA * x -
-            (udl * loaded * loaded) / 2 -
-            udl * loaded * (udlS - (udlS + loaded / 2));
-          break;
+        switch (caseType) {
+          case "simply-supported-point":
+            if (posA < x) {
+              V -= pointLoad;
+              M -= pointLoad * (x - posA);
+            }
+            break;
+          case "simply-supported-multi-point":
+            if (posA < x) {
+              V -= pointLoad;
+              M -= pointLoad * (x - posA);
+            }
+            if (posA2 < x) {
+              V -= pointLoad2;
+              M -= pointLoad2 * (x - posA2);
+            }
+            break;
+          case "simply-supported-udl":
+            length_left = Math.max(0, Math.min(x - udlS, load_len));
+            total_left = udl * length_left;
+            dist_cent = length_left / 2;
+            V -= total_left;
+            M -= total_left * dist_cent;
+            break;
+          case "simply-supported-triangular":
+            length_left = Math.max(0, Math.min(x - udlS, load_len));
+            k = triLoad / load_len;
+            total_left = (k * length_left * length_left) / 2;
+            dist_cent = length_left / 3;
+            V -= total_left;
+            M -= total_left * dist_cent;
+            break;
         }
-
-        case "cantilever-udl": {
-          const loadLength = udlE - udlS;
-          const loadedFromFree = Math.max(
-            0,
-            Math.min(len - x - udlS, loadLength)
-          );
-          V = -udl * loadedFromFree;
-          M = -(udl * loadedFromFree * loadedFromFree) / 2;
-          break;
+      } else {
+        // cantilever cases
+        posS1 = 0;
+        switch (caseType) {
+          case "cantilever-point":
+            RA = pointLoad;
+            Mfix = -pointLoad * (posA - posS1);
+            if (posS1 < x) {
+              V += RA;
+              M += RA * (x - posS1) + Mfix;
+            }
+            if (posA < x) {
+              V -= pointLoad;
+              M -= pointLoad * (x - posA);
+            }
+            break;
+          case "cantilever-udl":
+            let length_right = Math.max(0, udlE - Math.max(udlS, x));
+            let total_right = udl * length_right;
+            RA = total_right;
+            let load_len_c = udlE - udlS;
+            let cent_right = len - (udlS + load_len_c / 2);
+            Mfix = -(udl * load_len_c) * cent_right;
+            if (posS1 < x) {
+              V += RA;
+              M += RA * (x - posS1) + Mfix;
+            }
+            let length_left_c = Math.max(0, Math.min(x - udlS, load_len_c));
+            const total_left = udl * length_left_c;
+            const dist_cent = length_left_c / 2;
+            V -= total_left;
+            M -= total_left * dist_cent;
+            break;
         }
-
-        case "simply-supported-triangular": {
-          const loadLength = udlE - udlS;
-          const totalLoad = (triLoad * loadLength) / 2;
-          const centroidFromStart = loadLength / 3;
-          const RA = (totalLoad * (len - (udlS + centroidFromStart))) / len;
-          const RB = totalLoad - RA;
-          const loaded = Math.max(0, Math.min(x - udlS, loadLength));
-          const wAtEndOfLoaded = triLoad * (loaded / loadLength);
-          V = RA - (wAtEndOfLoaded * loaded) / 2;
-          M = RA * x - (wAtEndOfLoaded * loaded * loaded) / 3;
-          break;
-        }
-
-        default:
-          break;
+        V = -V;
       }
 
       shear.push(Number(V.toFixed(6)));
@@ -175,181 +230,90 @@ export default function Home() {
     // Reactions and analytic max values
     let reactionText = "";
     let steps = [];
-    let maxShear = 0;
-    let maxMoment = 0;
     let equations = { shear: "", moment: "" };
 
-    switch (caseType) {
-      case "simply-supported-point": {
-        const RA = (pointLoad * (len - posA)) / len;
-        const RB = (pointLoad * posA) / len;
-        reactionText = `Reactions: RA = ${RA.toFixed(3)} kN, RB = ${RB.toFixed(
-          3
-        )} kN`;
-        steps.push(`Total load = P = ${pointLoad} kN`);
-        steps.push(
-          `RA = P·(L-a)/L = ${pointLoad}·(${len}-${posA})/${len} = ${RA.toFixed(
+    const isSimplySupported = caseType.startsWith("simply-supported");
+
+    let RA = 0;
+    let RB = 0;
+    let Mfix = 0;
+    let total_load = 0;
+    let moment_about_S1 = 0;
+    let load_len = udlE - udlS;
+
+    if (isSimplySupported) {
+      switch (caseType) {
+        case "simply-supported-point":
+          total_load = pointLoad;
+          moment_about_S1 = pointLoad * (posA - posS1);
+          break;
+        case "simply-supported-multi-point":
+          total_load = pointLoad + pointLoad2;
+          moment_about_S1 =
+            pointLoad * (posA - posS1) + pointLoad2 * (posA2 - posS1);
+          break;
+        case "simply-supported-udl":
+          total_load = udl * load_len;
+          let cent_udl = udlS + load_len / 2;
+          moment_about_S1 = total_load * (cent_udl - posS1);
+          break;
+        case "simply-supported-triangular":
+          total_load = (triLoad * load_len) / 2;
+          let cent_tri = udlS + load_len / 3;
+          moment_about_S1 = total_load * (cent_tri - posS1);
+          break;
+      }
+
+      let span = posS2 - posS1;
+      RB = span > 0 ? moment_about_S1 / span : 0;
+      RA = total_load - RB;
+
+      reactionText = `Reactions: RA at ${posS1.toFixed(2)} = ${RA.toFixed(
+        3
+      )} kN, RB at ${posS2.toFixed(3)} = ${RB.toFixed(3)} kN`;
+
+      steps.push(`Supports at x=${posS1.toFixed(2)}, x=${posS2.toFixed(2)}`);
+      steps.push(`Total load = ${total_load.toFixed(3)} kN`);
+      steps.push(`Moment about RA: ${moment_about_S1.toFixed(3)} kN·m`);
+      steps.push(
+        `RB = moment / span = ${moment_about_S1.toFixed(3)} / ${span.toFixed(
+          2
+        )} = ${RB.toFixed(3)} kN`
+      );
+      steps.push(`RA = total - RB = ${RA.toFixed(3)} kN`);
+      steps.push(`Shear and moment calculated by section method.`);
+    } else {
+      // cantilever
+      switch (caseType) {
+        case "cantilever-point":
+          RA = pointLoad;
+          Mfix = -pointLoad * (posA - posS1);
+          reactionText = `At fixed support: vertical = ${RA.toFixed(
             3
-          )} kN`
-        );
-        steps.push(
-          `RB = P·a/L = ${pointLoad}·${posA}/${len} = ${RB.toFixed(3)} kN`
-        );
-        steps.push(`Shear: V(x) = RA for x < a; V(x) = RA - P for x ≥ a`);
-        steps.push(`Moment: M(x) = RA·x for x ≤ a; M(x) = RB·(L-x) for x ≥ a`);
-        maxShear = Math.max(Math.abs(RA), Math.abs(RA - pointLoad));
-        maxMoment = Math.abs(RA * posA);
-        equations.shear = `V(x) = \\begin{cases} ${RA.toFixed(
-          3
-        )} & x < ${posA} \\\\ ${(RA - pointLoad).toFixed(
-          3
-        )} & x \\geq ${posA} \\end{cases}`;
-        equations.moment = `M(x) = \\begin{cases} ${RA.toFixed(
-          3
-        )} \\cdot x & x \\leq ${posA} \\\\ ${RB.toFixed(
-          3
-        )} \\cdot (L - x) & x \\geq ${posA} \\end{cases}`;
-        break;
-      }
-
-      case "simply-supported-multi-point": {
-        const RA =
-          (pointLoad * (len - posA) + pointLoad2 * (len - posA2)) / len;
-        const RB = pointLoad + pointLoad2 - RA;
-        reactionText = `Reactions: RA = ${RA.toFixed(3)} kN, RB = ${RB.toFixed(
-          3
-        )} kN`;
-        const ans = pointLoad + pointLoad2;
-        steps.push(`Total load = P1 + P2 = ${ans} kN`);
-        steps.push(`RA = (P1·(L-a1) + P2·(L-a2))/L = ${RA.toFixed(3)} kN`);
-        steps.push(`RB = P1 + P2 - RA = ${RB.toFixed(3)} kN`);
-        steps.push(
-          `Shear: V(x) = RA for x < min(a1,a2); then subtract loads as passed`
-        );
-        steps.push(`Moment: M(x) = RA·x - sum of P_i·(x - a_i) for a_i < x`);
-        maxShear = Math.max(
-          Math.abs(RA),
-          Math.abs(RA - pointLoad),
-          Math.abs(RA - pointLoad - pointLoad2)
-        );
-        maxMoment = Math.max(...moment.map(Math.abs));
-        equations.shear = `V(x) = RA - \\sum P_i \\ for\\ x > a_i`;
-        equations.moment = `M(x) = RA \\cdot x - \\sum P_i \\cdot (x - a_i)\\ for\\ x > a_i`;
-        break;
-      }
-
-      case "cantilever-point": {
-        const reaction = pointLoad;
-        const Mfix = -pointLoad * len;
-        reactionText = `At fixed support: vertical = ${reaction.toFixed(
-          3
-        )} kN, moment = ${Mfix.toFixed(3)} kN·m`;
-        steps.push(`Point load P = ${pointLoad} kN at free end`);
-        steps.push(`Vertical reaction = P = ${pointLoad.toFixed(3)} kN`);
-        steps.push(`Fixed-end moment = -P·L = ${Mfix.toFixed(3)} kN·m`);
-        steps.push(`Shear: V(x) = -P = ${-pointLoad.toFixed(3)} kN`);
-        steps.push(`Moment: M(x) = -P·(L-x)`);
-        maxShear = Math.abs(pointLoad);
-        maxMoment = Math.abs(pointLoad * len);
-        equations.shear = `V(x) = ${-pointLoad.toFixed(3)}`;
-        equations.moment = `M(x) = -${pointLoad.toFixed(3)} \\cdot (L - x)`;
-        break;
-      }
-
-      case "simply-supported-udl": {
-        const loadLength = udlE - udlS;
-        const totalLoad = udl * loadLength;
-        const centroid = udlS + loadLength / 2;
-        const RA = (totalLoad * (len - centroid)) / len;
-        const RB = totalLoad - RA;
-        reactionText = `Reactions: RA = ${RA.toFixed(3)} kN, RB = ${RB.toFixed(
-          3
-        )} kN`;
-        steps.push(
-          `Total load = w·(b-a) = ${udl}·${loadLength} = ${totalLoad.toFixed(
+          )} kN, moment = ${Mfix.toFixed(3)} kN·m`;
+          steps.push(`Point load at x=${posA.toFixed(2)}`);
+          steps.push(`RA = ${RA.toFixed(3)} kN`);
+          steps.push(`Mfix = ${Mfix.toFixed(3)} kN·m`);
+          break;
+        case "cantilever-udl":
+          load_len = udlE - udlS;
+          total_load = udl * load_len;
+          let cent = udlS + load_len / 2;
+          Mfix = -total_load * (cent - posS1);
+          RA = total_load;
+          reactionText = `At fixed support: vertical = ${RA.toFixed(
             3
-          )} kN`
-        );
-        steps.push(`Centroid at ${centroid.toFixed(3)} from left`);
-        steps.push(`RA = W·(L - centroid)/L = ${RA.toFixed(3)} kN`);
-        steps.push(`RB = W - RA = ${RB.toFixed(3)} kN`);
-        steps.push(`Shear: V(x) = RA - w·(max(0, min(x-a, b-a)))`);
-        steps.push(
-          `Moment: M(x) = RA·x - w·(max(0, d)·d/2) where d = min(x-a, b-a)`
-        );
-        maxShear = Math.max(...shear.map(Math.abs));
-        maxMoment = Math.max(...moment.map(Math.abs));
-        equations.shear = `V(x) = ${RA.toFixed(3)} - ${udl.toFixed(
-          3
-        )} \\cdot \\max(0, \\min(x-${udlS}, ${loadLength}))`;
-        equations.moment = `M(x) = ${RA.toFixed(
-          3
-        )} \\cdot x - \\frac{${udl.toFixed(
-          3
-        )} \\cdot [\\max(0, \\min(x-${udlS}, ${loadLength}))]^2}{2}`;
-        break;
+          )} kN, moment = ${Mfix.toFixed(3)} kN·m`;
+          steps.push(`UDL from ${udlS.toFixed(2)} to ${udlE.toFixed(2)}`);
+          steps.push(`Total load = ${total_load.toFixed(3)} kN`);
+          steps.push(`RA = ${RA.toFixed(3)} kN`);
+          steps.push(`Mfix = ${Mfix.toFixed(3)} kN·m`);
+          break;
       }
-
-      case "cantilever-udl": {
-        const loadLength = udlE - udlS;
-        const totalLoad = udl * loadLength;
-        const distanceToCentroid = len - (udlS + loadLength / 2);
-        const Mfix = -totalLoad * distanceToCentroid;
-        reactionText = `At fixed support: vertical = ${totalLoad.toFixed(
-          3
-        )} kN (upward), moment = ${Mfix.toFixed(3)} kN·m`;
-        steps.push(`Total load = w·(b-a) = ${totalLoad.toFixed(3)} kN`);
-        steps.push(`Shear V(x) = -w·max(0, min(L-x - a, b-a))`);
-        steps.push(
-          `Moment M(x) = -w·[max(0, d)^2 / 2] where d = min(L-x - a, b-a)`
-        );
-        maxShear = Math.abs(totalLoad);
-        maxMoment = Math.abs(Mfix);
-        equations.shear = `V(x) = -${udl.toFixed(
-          3
-        )} \\cdot \\max(0, \\min(L - x - ${udlS}, ${loadLength}))`;
-        equations.moment = `M(x) = - \\frac{${udl.toFixed(
-          3
-        )} \\cdot [\\max(0, \\min(L - x - ${udlS}, ${loadLength}))]^2}{2}`;
-        break;
-      }
-
-      case "simply-supported-triangular": {
-        const loadLength = udlE - udlS;
-        const totalLoad = (triLoad * loadLength) / 2;
-        const centroidFromStart = loadLength / 3;
-        const centroid = udlS + centroidFromStart;
-        const RA = (totalLoad * (len - centroid)) / len;
-        const RB = totalLoad - RA;
-        reactionText = `Reactions: RA = ${RA.toFixed(3)} kN, RB = ${RB.toFixed(
-          3
-        )} kN`;
-        steps.push(`Total load = (w·(b-a))/2 = ${totalLoad.toFixed(3)} kN`);
-        steps.push(
-          `Centroid at a + (b-a)/3 = ${centroid.toFixed(3)} from left`
-        );
-        steps.push(`RA = W·(L - centroid)/L = ${RA.toFixed(3)} kN`);
-        steps.push(`RB = W - RA = ${RB.toFixed(3)} kN`);
-        steps.push(
-          `Shear V(x) = RA - (w_at_d · d)/2 where d = max(0, min(x-a, b-a)), w_at_d = w·(d/(b-a))`
-        );
-        steps.push(`Moment M(x) = RA·x - (w_at_d · d^2)/3`);
-        maxShear = Math.max(...shear.map(Math.abs));
-        maxMoment = Math.max(...moment.map(Math.abs));
-        equations.shear = `V(x) = ${RA.toFixed(3)} - \\frac{${triLoad.toFixed(
-          3
-        )} \\cdot d /(b-a) \\cdot d}{2},\\ d = \\max(0, \\min(x-${udlS}, ${loadLength}))`;
-        equations.moment = `M(x) = ${RA.toFixed(
-          3
-        )} \\cdot x - \\frac{${triLoad.toFixed(
-          3
-        )} \\cdot d /(b-a) \\cdot d^2}{3}`;
-        break;
-      }
-
-      default:
-        break;
     }
+
+    const maxShear = shear.reduce((max, v) => Math.max(max, Math.abs(v)), 0);
+    const maxMoment = moment.reduce((max, v) => Math.max(max, Math.abs(v)), 0);
 
     return {
       xs,
@@ -371,7 +335,21 @@ export default function Home() {
       udlE,
       equations,
     };
-  }, [L, P, P2, w, triangularLoad, caseType, a, a2, udlStart, udlEnd, units]);
+  }, [
+    L,
+    P,
+    P2,
+    w,
+    triangularLoad,
+    caseType,
+    a,
+    a2,
+    udlStart,
+    udlEnd,
+    units,
+    supportLeft,
+    supportRight,
+  ]);
 
   // Chart data & options
   const shearData = {
@@ -433,8 +411,10 @@ export default function Home() {
   const showTriangular = caseType === "simply-supported-triangular";
   const showPositionA =
     caseType === "simply-supported-point" ||
-    caseType === "simply-supported-multi-point";
+    caseType === "simply-supported-multi-point" ||
+    caseType === "cantilever-point";
   const showUdlPositions = showUdl || showTriangular;
+  const showSupports = caseType.startsWith("simply-supported");
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-gray-100 to-gray-200 p-6 flex justify-center">
@@ -580,6 +560,36 @@ export default function Home() {
             </label>
           )}
 
+          {showSupports && (
+            <label className="flex flex-col text-sm font-medium text-gray-700">
+              Left support position ({units === "SI" ? "m" : "ft"})
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                max={L}
+                value={supportLeft}
+                onChange={(e) => setSupportLeft(e.target.value)}
+                className="mt-2 border rounded-lg px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </label>
+          )}
+
+          {showSupports && (
+            <label className="flex flex-col text-sm font-medium text-gray-700">
+              Right support position ({units === "SI" ? "m" : "ft"})
+              <input
+                type="number"
+                step="0.01"
+                min={supportLeft}
+                max={L}
+                value={supportRight}
+                onChange={(e) => setSupportRight(e.target.value)}
+                className="mt-2 border rounded-lg px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </label>
+          )}
+
           <label className="flex flex-col text-sm font-medium text-gray-700">
             Units
             <select
@@ -605,9 +615,7 @@ export default function Home() {
               <option value="simply-supported-multi-point">
                 Simply supported — multiple points
               </option>
-              <option value="cantilever-point">
-                Cantilever — point (free end)
-              </option>
+              <option value="cantilever-point">Cantilever — point load</option>
               <option value="simply-supported-udl">
                 Simply supported — partial UDL
               </option>
@@ -683,6 +691,8 @@ export default function Home() {
               <br />
               Triangular loads peak at the specified value, linearly varying
               from zero.
+              <br />
+              Supports can be moved using inputs or by dragging in the diagram.
             </p>
           </div>
         </section>
@@ -702,6 +712,10 @@ export default function Home() {
             udlEnd={udlEnd}
             triangularLoad={triangularLoad}
             units={units}
+            supportLeft={supportLeft}
+            supportRight={supportRight}
+            setSupportLeft={setSupportLeft}
+            setSupportRight={setSupportRight}
           />
         </section>
         <section className="grid lg:grid-cols-2 gap-6">

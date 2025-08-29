@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useRef, useState, useEffect } from "react";
 
 export default function BeamDiagram({
   caseType,
@@ -14,6 +14,10 @@ export default function BeamDiagram({
   udlEnd,
   triangularLoad,
   units,
+  supportLeft,
+  supportRight,
+  setSupportLeft,
+  setSupportRight,
 }) {
   const svgWidth = 600;
   const beamLength = 500; // pixel length of beam
@@ -25,10 +29,46 @@ export default function BeamDiagram({
   const posA2 = xStart + Number(a2) * scale;
   const udlStartPx = xStart + Number(udlStart) * scale;
   const udlEndPx = xStart + Number(udlEnd) * scale;
+  const posS1 = xStart + Number(supportLeft) * scale;
+  const posS2 = xStart + Number(supportRight) * scale;
+
+  const svgRef = useRef(null);
+  const [dragging, setDragging] = useState(null); // 'left' or 'right'
+
+  useEffect(() => {
+    const handlePointerMove = (e) => {
+      if (dragging) {
+        const rect = svgRef.current.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        let newPos = (px - xStart) / scale;
+        newPos = Math.max(0, Math.min(newPos, L));
+        if (dragging === "left") {
+          setSupportLeft(Math.min(newPos, supportRight));
+        } else if (dragging === "right") {
+          setSupportRight(Math.max(newPos, supportLeft));
+        }
+      }
+    };
+
+    const handlePointerUp = () => {
+      setDragging(null);
+    };
+
+    if (dragging) {
+      document.addEventListener("pointermove", handlePointerMove);
+      document.addEventListener("pointerup", handlePointerUp);
+    }
+
+    return () => {
+      document.removeEventListener("pointermove", handlePointerMove);
+      document.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [dragging, scale, L, supportRight, supportLeft, xStart]);
 
   return (
     <div className="flex justify-center items-center py-6">
       <svg
+        ref={svgRef}
         width={svgWidth}
         height="200"
         viewBox={`0 0 ${svgWidth} 200`}
@@ -47,26 +87,34 @@ export default function BeamDiagram({
         {/* Supports */}
         {caseType.startsWith("simply-supported") && (
           <>
-            {/* Left support (triangle + roller) */}
-            <polygon
-              points={`${xStart},120 ${xStart - 10},140 ${xStart + 10},140`}
-              fill="gray"
-            />
-            <circle cx={xStart} cy="145" r="3" fill="black" />
-            {/* Right support (triangle + roller) */}
-            <polygon
-              points={`${xStart + beamLength},120 ${
-                xStart + beamLength - 10
-              },140 ${xStart + beamLength + 10},140`}
-              fill="gray"
-            />
-            <circle cx={xStart + beamLength} cy="145" r="3" fill="black" />
+            {/* Left support */}
+            <g
+              onPointerDown={() => setDragging("left")}
+              style={{ cursor: "move" }}
+            >
+              <polygon
+                points={`${posS1},120 ${posS1 - 10},140 ${posS1 + 10},140`}
+                fill="gray"
+              />
+              <circle cx={posS1} cy="145" r="3" fill="black" />
+            </g>
+            {/* Right support */}
+            <g
+              onPointerDown={() => setDragging("right")}
+              style={{ cursor: "move" }}
+            >
+              <polygon
+                points={`${posS2},120 ${posS2 - 10},140 ${posS2 + 10},140`}
+                fill="gray"
+              />
+              <circle cx={posS2} cy="145" r="3" fill="black" />
+            </g>
           </>
         )}
 
         {caseType.startsWith("cantilever") && (
           <>
-            {/* Fixed end (rectangle with crosshatch) */}
+            {/* Fixed end */}
             <rect
               x={xStart - 10}
               y="80"
@@ -135,15 +183,15 @@ export default function BeamDiagram({
         {caseType === "cantilever-point" && Number(P) > 0 && (
           <>
             <line
-              x1={xStart + beamLength}
+              x1={posA}
               y1="70"
-              x2={xStart + beamLength}
+              x2={posA}
               y2="120"
               stroke="red"
               strokeWidth="2"
               markerEnd="url(#arrow)"
             />
-            <text x={xStart + beamLength - 70} y="90" fill="red" fontSize="14">
+            <text x={posA - 70} y="90" fill="red" fontSize="14">
               P={Number(P).toFixed(1)} {units === "SI" ? "kN" : "kip"}
             </text>
           </>
